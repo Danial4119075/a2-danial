@@ -6,12 +6,32 @@ using System.Collections.Generic;
 public class AStarGrid : MonoBehaviour
 {
     public bool displayGridGizmos;
+
+    // ---- Obstacle detection ----
+    // Objects on this layer are treated as solid walls — the node is marked unwalkable.
+    // UNITY SETUP: the "Obstacle" layer already exists. Rocks and Trees are on it.
     public LayerMask unwalkableMask;
+
+    // ---- Terrain detection (Task 2 — Varying Terrain) ----
+    // Objects on this layer slow movement but don't block it entirely.
+    // UNITY SETUP:
+    //   1. Edit > Project Settings > Tags and Layers
+    //   2. Add a new User Layer called exactly "Mud"
+    //   3. Select each MudPatch GameObject in the Hierarchy
+    //   4. Change its Layer (top of Inspector) to "Mud"
+    //   5. Back here, set this LayerMask field to "Mud" in the Inspector
+    public LayerMask terrainMask;
+
+    // How much more expensive mud is to cross compared to normal ground.
+    // A value of 3 means A* will prefer a 3x-longer grass path over cutting through mud.
+    // Visible effect: frog detours around mud when a roughly equal grass route exists.
+    // Try values between 2 and 5. Default 3 is a good starting point for the demo.
+    public float mudPenalty = 3f;
+
     public Vector2 gridWorldSize;
     public float gridSize;
     public float overlapCircleRadius;
 
-    // TODO: This is unused, and can be added as part of the workshop
     public bool includeDiagonalNeighbours;
 
     Node[,] grid;
@@ -46,41 +66,78 @@ public class AStarGrid : MonoBehaviour
             {
                 Vector2 worldPoint = worldBottomLeft + Vector2.right * (x * nodeDiameter + gridSize) + Vector2.up * (y * nodeDiameter + gridSize);
 
+                // A node is unwalkable if any obstacle collider overlaps its centre point.
+                // This mirrors how the assignment spec says to detect terrain type —
+                // using the same OverlapCircle approach, just with a different LayerMask.
                 bool walkable = (Physics2D.OverlapCircle(worldPoint, overlapCircleRadius, unwalkableMask) == null);
 
-                grid[x, y] = new Node(walkable, worldPoint, x, y);
+                // Task 2 — Varying Terrain:
+                // Check whether this node sits on slow terrain (e.g. mud).
+                // If so, assign a movement penalty so A* prefers grass routes.
+                // A node can be on mud AND be unwalkable (e.g. a rock sitting on mud) —
+                // in that case walkable = false takes priority and the penalty is irrelevant.
+                float penalty = 1.0f; // default: normal terrain, no extra cost
+                if (walkable && Physics2D.OverlapCircle(worldPoint, overlapCircleRadius, terrainMask) != null)
+                {
+                    penalty = mudPenalty; // mud: movement is penalised
+                }
+
+                grid[x, y] = new Node(walkable, worldPoint, x, y, penalty);
             }
         }
     }
 
     public List<Node> GetNeighbours(Node node)
     {
-        // TODO: Update this method to include diagonal neighbours if includeDiagonalNeighbours == true.
-
         List<Node> neighbours = new List<Node>();
 
-        // Left
-        if (node.gridX - 1 > 0)
+        // Loop over the 3x3 block of cells surrounding the node.
+        // dx and dy each range from -1 (one cell left/down) to +1 (one cell right/up).
+        for (int dx = -1; dx <= 1; dx++)
         {
-            neighbours.Add(grid[node.gridX - 1, node.gridY]);
-        }
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                // Skip the centre cell — that's the node itself, not a neighbour.
+                if (dx == 0 && dy == 0)
+                    continue;
 
-        // Right
-        if (node.gridX + 1 < gridSizeX)
-        {
-            neighbours.Add(grid[node.gridX + 1, node.gridY]);
-        }
+                // If diagonal movement is disabled, skip cells where BOTH dx and dy
+                // are non-zero (those are the four corner/diagonal cells).
+                // When disabled, only the four cardinal directions (up/down/left/right)
+                // are returned, each of which has exactly one of dx or dy equal to zero.
+                if (!includeDiagonalNeighbours && dx != 0 && dy != 0)
+                    continue;
 
-        // Up
-        if (node.gridY - 1 > 0)
-        {
-            neighbours.Add(grid[node.gridX, node.gridY - 1]);
-        }
+                int nx = node.gridX + dx;
+                int ny = node.gridY + dy;
 
-        // Down
-        if (node.gridY + 1 < gridSizeY)
-        {
-            neighbours.Add(grid[node.gridX, node.gridY + 1]);
+                // BUG FIX: the original code used "> 0" for the lower-bound check,
+                // which excluded index 0 (the bottom and left edges of the grid).
+                // The correct check is ">= 0" so every grid cell is reachable.
+                if (!InBounds(nx, ny))
+                    continue;
+
+                // CORNER-CUTTING FIX: for diagonal moves, also require that both
+                // adjacent cardinal cells are walkable.
+                //
+                // Example: moving diagonally from (x,y) to (x+1,y+1).
+                //   We check (x+1,y) and (x,y+1) are both walkable.
+                //   If either cardinal neighbour has an obstacle, the frog's physical
+                //   collider cannot squeeze through the corner gap, even though the
+                //   diagonal cell itself is technically walkable. Allowing such moves
+                //   causes the frog to walk into a corner and get stuck.
+                if (dx != 0 && dy != 0)
+                {
+                    bool cardinalXWalkable = InBounds(node.gridX + dx, node.gridY)
+                                            && grid[node.gridX + dx, node.gridY].walkable;
+                    bool cardinalYWalkable = InBounds(node.gridX, node.gridY + dy)
+                                            && grid[node.gridX, node.gridY + dy].walkable;
+                    if (!cardinalXWalkable || !cardinalYWalkable)
+                        continue;
+                }
+
+                neighbours.Add(grid[nx, ny]);
+            }
         }
 
         return neighbours;
@@ -173,13 +230,21 @@ public class AStarGrid : MonoBehaviour
         {
             foreach (Node n in grid)
             {
+                // Colour scheme (matches assignment spec Figure 2):
+                //   Red   = unwalkable (obstacle — rock, tree)
+                //   Blue  = slow terrain (mud — walkable but penalised)
+                //   Grey  = normal grass (walkable, no penalty)
                 if (!n.walkable)
                 {
                     Gizmos.color = Color.red;
                 }
+                else if (n.movementPenalty > 1.0f)
+                {
+                    Gizmos.color = Color.blue;
+                }
                 else
                 {
-                    Gizmos.color = Color.white;
+                    Gizmos.color = Color.grey;
                 }
 
                 Gizmos.DrawCube(n.worldPosition, Vector3.one * (nodeDiameter - 0.1f));

@@ -16,6 +16,14 @@ public class Node : IHeapItem<Node>
     public int gridX;
     public int gridY;
 
+    // Terrain movement penalty (Task 2 — Varying Terrain).
+    // Normal grass = 1.0 (no extra cost).
+    // Slow terrain (e.g. mud) = values > 1.0, making A* prefer paths that
+    // go around the slow terrain rather than through it.
+    // This multiplies the g(n) cost of entering this node, so A* naturally
+    // favours faster terrain even if the route is geometrically longer.
+    public float movementPenalty;
+
     // G Cost to get to this node
     public float gCost;
 
@@ -28,12 +36,15 @@ public class Node : IHeapItem<Node>
     // For heap management
     int heapIndex;
 
-    public Node(bool _walkable, Vector2 _worldPos, int _gridX, int _gridY)
+    // Updated constructor — accepts a movementPenalty so terrain cost is
+    // baked into each node when the grid is created.
+    public Node(bool _walkable, Vector2 _worldPos, int _gridX, int _gridY, float _movementPenalty = 1.0f)
     {
         walkable = _walkable;
         worldPosition = _worldPos;
         gridX = _gridX;
         gridY = _gridY;
+        movementPenalty = _movementPenalty;
     }
 
     public Node Clone()
